@@ -101,6 +101,12 @@ class EnvSensor(threading.Thread):
         self.stop = True
 
 if __name__ == '__main__':
+    try:
+        CHANNEL_ID = int(os.environ['AMBIENT_CHANNEL_ID'])
+        WRITE_KEY = os.environ['AMBIENT_WRITE_KEY']
+    except KeyError as e:
+        print('Missing environment variable: '.format(e))
+        exit(1)
     # EnvSensorクラスの実体を作成します
     e = EnvSensor()
     # スレッドとして処理を開始します
