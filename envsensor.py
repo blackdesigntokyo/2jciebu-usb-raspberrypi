@@ -1,127 +1,126 @@
 import serial
+import threading
 import time
+import ambient
+import os
 from datetime import datetime
-import sys
 
-# LED display rule. Normal Off.
-DISPLAY_RULE_NORMALLY_OFF = 0
+class EnvSensor(threading.Thread):
 
-# LED display rule. Normal On.
-DISPLAY_RULE_NORMALLY_ON = 1
+    def __init__(self, port='/dev/ttyUSB0', interval=1):
+        super(EnvSensor, self).__init__()
+        # スレッドの実行/停止を判断するフラグ
+        self.stop = False
+        # スレッドのループ毎の待機時間
+        self.interval = interval
+        # USBセンサとのシリアル通信の初期化
+        self.ser = serial.Serial(
+            port,
+            115200,
+            serial.EIGHTBITS,
+            serial.PARITY_NONE
+        )
+        # 各センサー値を格納する変数
+        self.co2 = None
+        self.temp = None
 
+    def run(self):
+        """
+            runメソッドは、このオブジェクトがスレッドとして
+            実行される際のメインループです
+        """
+        while not self.stop:
+            # 最新データの取得
+            data = self._get_latest_short()
+            # このオブジェクトを利用するプログラムのために、
+            # 取得したデータを元にインスタンス変数を更新します
+            self._update(data)
+            # インターバルに指定された時間だけ待機します
+            time.sleep(self.interval)
+            
+        # スレッドの停止処理が行われた場合、シリアルポートを閉じます
+        self._close()     
 
-def calc_crc(buf, length):
-    """
-    CRC-16 calculation.
-    """
-    crc = 0xFFFF
-    for i in range(length):
-        crc = crc ^ buf[i]
-        for i in range(8):
-            carrayFlag = crc & 1
-            crc = crc >> 1
-            if (carrayFlag == 1):
-                crc = crc ^ 0xA001
-    crcH = crc >> 8
-    crcL = crc & 0x00FF
-    return (bytearray([crcL, crcH]))
+    def _get_latest_short(self):
+        """
+            最新のセンサーデータを`latest_short`フォーマット
+            で取得します。詳しくはユーザーマニュアルの77pを
+            参照してください
+            https://omronfs.omron.com/ja_JP/ecb/products/pdf/CDSC-016A-web1.pdf
+        """
+        command = bytearray([0x52, 0x42, 0x05, 0x00, 0x01, 0x22, 0x50])
+        command = command + self._calc_crc(command,len(command))
+        tmp = self.ser.write(command)
+        time.sleep(1)   
+        return self.ser.read(30)
 
+    def _update(self, data):
+        """
+            センサー値格納用のインスタンス変数を更新します
+        """
+        self.co2 = int(hex(data[23])+format(data[22], 'x'), 16)
+        self.temp = int(hex(data[9])+format(data[8], 'x'), 16)/100
 
-def print_latest_data(data):
-    """
-    print measured latest value.
-    """
-    time_measured = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-    temperature = str(int(hex(data[9]) + format(data[8], 'x'), 16) / 100)
-    relative_humidity = str(int(hex(data[11]) + format(data[10], 'x'), 16) / 100)
-    ambient_light = str(int(hex(data[13]) + format(data[12], 'x'), 16))
-    barometric_pressure = str(
-        int(hex(data[17]) + format(data[16], 'x') + format(data[15], 'x') + format(data[14], 'x'), 16) / 1000)
-    sound_noise = str(int(hex(data[19]) + format(data[18], 'x'), 16) / 100)
-    eTVOC = str(int(hex(data[21]) + format(data[20], 'x'), 16))
-    eCO2 = str(int(hex(data[23]) + format(data[22], 'x'), 16))
-    discomfort_index = str(int(hex(data[25]) + format(data[24], 'x'), 16) / 100)
-    heat_stroke = str(int(hex(data[27]) + format(data[26], 'x'), 16) / 100)
-    vibration_information = str(int(hex(data[28]), 16))
-    si_value = str(int(hex(data[30]) + format(data[29], 'x'), 16) / 10)
-    pga = str(int(hex(data[32]) + format(data[31], 'x'), 16) / 10)
-    seismic_intensity = str(int(hex(data[34]) + format(data[33], 'x'), 16) / 1000)
-    temperature_flag = str(int(hex(data[36]) + format(data[35], 'x'), 16))
-    relative_humidity_flag = str(int(hex(data[38]) + format(data[37], 'x'), 16))
-    ambient_light_flag = str(int(hex(data[40]) + format(data[39], 'x'), 16))
-    barometric_pressure_flag = str(int(hex(data[42]) + format(data[41], 'x'), 16))
-    sound_noise_flag = str(int(hex(data[44]) + format(data[43], 'x'), 16))
-    etvoc_flag = str(int(hex(data[46]) + format(data[45], 'x'), 16))
-    eco2_flag = str(int(hex(data[48]) + format(data[47], 'x'), 16))
-    discomfort_index_flag = str(int(hex(data[50]) + format(data[49], 'x'), 16))
-    heat_stroke_flag = str(int(hex(data[52]) + format(data[51], 'x'), 16))
-    si_value_flag = str(int(hex(data[53]), 16))
-    pga_flag = str(int(hex(data[54]), 16))
-    seismic_intensity_flag = str(int(hex(data[55]), 16))
-    print("")
-    print("Time measured:" + time_measured)
-    print("Temperature:" + temperature)
-    print("Relative humidity:" + relative_humidity)
-    print("Ambient light:" + ambient_light)
-    print("Barometric pressure:" + barometric_pressure)
-    print("Sound noise:" + sound_noise)
-    print("eTVOC:" + eTVOC)
-    print("eCO2:" + eCO2)
-    print("Discomfort index:" + discomfort_index)
-    print("Heat stroke:" + heat_stroke)
-    print("Vibration information:" + vibration_information)
-    print("SI value:" + si_value)
-    print("PGA:" + pga)
-    print("Seismic intensity:" + seismic_intensity)
-    print("Temperature flag:" + temperature_flag)
-    print("Relative humidity flag:" + relative_humidity_flag)
-    print("Ambient light flag:" + ambient_light_flag)
-    print("Barometric pressure flag:" + barometric_pressure_flag)
-    print("Sound noise flag:" + sound_noise_flag)
-    print("eTVOC flag:" + etvoc_flag)
-    print("eCO2 flag:" + eco2_flag)
-    print("Discomfort index flag:" + discomfort_index_flag)
-    print("Heat stroke flag:" + heat_stroke_flag)
-    print("SI value flag:" + si_value_flag)
-    print("PGA flag:" + pga_flag)
-    print("Seismic intensity flag:" + seismic_intensity_flag)
+    def _calc_crc(self, buf, length):
+        """
+            データの誤りを検出させるために、CRC演算を行います。
+            演算方法の詳細はユーザーマニュアルの68pを参照してください
+            https://omronfs.omron.com/ja_JP/ecb/products/pdf/CDSC-016A-web1.pdf
+        """
+        crc = 0xFFFF
+        for i in range(length):
+            crc = crc ^ buf[i]
+            for i in range(8):
+                carrayFlag = crc & 1
+                crc = crc >> 1
+                if (carrayFlag == 1) : 
+                    crc = crc ^ 0xA001
+        crcH = crc >> 8
+        crcL = crc & 0x00FF
+        return(bytearray([crcL,crcH]))
 
+    def _close(self):
+        self.ser.close()
 
-def now_utc_str():
-    """
-    Get now utc.
-    """
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    def get_co2(self):
+        return self.co2
 
+    def get_temp(self):
+        raise self.temp
+    
+    def get_humi(self):
+        raise NotImplementedError()
+
+    def stop(self):
+        """
+            スレッドを終了させます
+        """
+        self.stop = True
 
 if __name__ == '__main__':
-
-    # Serial.
-    ser = serial.Serial("/dev/ttyUSB0", 115200, serial.EIGHTBITS, serial.PARITY_NONE)
-
     try:
-        # LED On. Color of Green.
-        command = bytearray([0x52, 0x42, 0x0a, 0x00, 0x02, 0x11, 0x51, DISPLAY_RULE_NORMALLY_ON, 0x00, 0, 255, 0])
-        command = command + calc_crc(command, len(command))
-        ser.write(command)
-        time.sleep(0.1)
-        ret = ser.read(ser.inWaiting())
+        CHANNEL_ID = int(os.environ['AMBIENT_CHANNEL_ID'])
+        WRITE_KEY = os.environ['AMBIENT_WRITE_KEY']
+    except KeyError as e:
+        print('Missing environment variable: {}'.format(e))
+        exit(1)
 
-        while ser.isOpen():
-            # Get Latest data Long.
-            command = bytearray([0x52, 0x42, 0x05, 0x00, 0x01, 0x21, 0x50])
-            command = command + calc_crc(command, len(command))
-            tmp = ser.write(command)
-            time.sleep(0.1)
-            data = ser.read(ser.inWaiting())
-            print_latest_data(data)
+    am = ambient.Ambient(CHANNEL_ID, WRITE_KEY)
+
+    # EnvSensorクラスの実体を作成します
+    e = EnvSensor()
+    # スレッドとして処理を開始します
+    e.start()
+
+    last_uploaded = datetime.now()
+    while True:
+        try:
+            timestamp = datetime.now()
+            if (timestamp - last_uploaded).seconds > 10:
+                 am.send({
+                    "d1": e.get_co2(),
+                    "created": timestamp.strftime("%Y/%m/%d %H:%M:%S")
+                })
             time.sleep(1)
-
-    except KeyboardInterrupt:
-        # LED Off.
-        command = bytearray([0x52, 0x42, 0x0a, 0x00, 0x02, 0x11, 0x51, DISPLAY_RULE_NORMALLY_OFF, 0x00, 0, 0, 0])
-        command = command + calc_crc(command, len(command))
-        ser.write(command)
-        time.sleep(1)
-        # script finish.
-        sys.exit
+        except KeyboardInterrupt:
+break
